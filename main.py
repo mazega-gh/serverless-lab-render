@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify
-import psycopg2
+import pg8000
 import os
 from urllib.parse import urlparse
+import datetime
 
 app = Flask(__name__)
 
@@ -10,19 +11,23 @@ def get_db_connection():
     try:
         DATABASE_URL = os.environ.get('DATABASE_URL')
         if not DATABASE_URL:
+            print("❌ DATABASE_URL not found")
             return None
             
         url = urlparse(DATABASE_URL)
-        conn = psycopg2.connect(
-            database=url.path[1:],
+        
+        # Подключаемся к базе
+        conn = pg8000.connect(
+            database=url.path[1:],  # убираем первый символ '/'
             user=url.username,
             password=url.password,
             host=url.hostname,
             port=url.port
         )
+        print("✅ Database connected successfully!")
         return conn
     except Exception as e:
-        print(f"Database connection error: {e}")
+        print(f"❌ Database connection error: {e}")
         return None
 
 # Создание таблицы при старте
@@ -68,7 +73,10 @@ def save_message():
         return jsonify({"error": "Database not available"}), 500
     
     data = request.get_json()
-    message = data.get('message', '') if data else ''
+    if not data:
+        return jsonify({"error": "No JSON data provided"}), 400
+        
+    message = data.get('message', '')
     
     try:
         with conn.cursor() as cur:
@@ -91,12 +99,29 @@ def get_messages():
         with conn.cursor() as cur:
             cur.execute("SELECT id, content, created_at FROM messages ORDER BY id DESC LIMIT 10")
             rows = cur.fetchall()
-            messages = [{"id": r[0], "text": r[1], "time": r[2].isoformat()} for r in rows]
+            messages = []
+            for row in rows:
+                messages.append({
+                    "id": row[0],
+                    "text": row[1],
+                    "time": row[2].isoformat() if hasattr(row[2], 'isoformat') else str(row[2])
+                })
         return jsonify(messages)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+
+@app.route('/health')
+def health_check():
+    conn = get_db_connection()
+    db_status = "connected" if conn else "disconnected"
+    if conn:
+        conn.close()
+    return jsonify({
+        "status": "healthy",
+        "database": db_status
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
